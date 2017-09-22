@@ -25,9 +25,10 @@ extern const AP_HAL::HAL& hal;
    constructor is not called until detect() returns true, so we
    already know that we should setup the rangefinder
 */
-AP_RangeFinder_uLanding::AP_RangeFinder_uLanding(RangeFinder::RangeFinder_State &_state,
-                                                 AP_SerialManager &serial_manager) :
-    AP_RangeFinder_Backend(_state)
+AP_RangeFinder_uLanding::AP_RangeFinder_uLanding(RangeFinder &_ranger, uint8_t instance,
+                                                             RangeFinder::RangeFinder_State &_state,
+                                                             AP_SerialManager &serial_manager) :
+    AP_RangeFinder_Backend(_ranger, instance, _state)
 {
     uart = serial_manager.find_serial(AP_SerialManager::SerialProtocol_Aerotenna_uLanding, 0);
     if (uart != nullptr) {
@@ -40,7 +41,7 @@ AP_RangeFinder_uLanding::AP_RangeFinder_uLanding(RangeFinder::RangeFinder_State 
    trying to take a reading on Serial. If we get a result the sensor is
    there.
 */
-bool AP_RangeFinder_uLanding::detect(AP_SerialManager &serial_manager)
+bool AP_RangeFinder_uLanding::detect(RangeFinder &_ranger, uint8_t instance, AP_SerialManager &serial_manager)
 {
     return serial_manager.find_serial(AP_SerialManager::SerialProtocol_Aerotenna_uLanding, 0) != nullptr;
 }
@@ -57,11 +58,17 @@ bool AP_RangeFinder_uLanding::get_reading(uint16_t &reading_cm)
     uint16_t count = 0;
     uint8_t  index = 0;
 
+#if ULANDING_VERSION == 1
+    uint8_t ulanding_hdr = 254;
+#else
+    uint8_t ulanding_hdr = 72;
+#endif
+
     int16_t nbytes = uart->available();
     while (nbytes-- > 0) {
         uint8_t c = uart->read();
         // ok, we have located start byte
-        if (c == 72 && index == 0) {
+        if (c == ulanding_hdr && index == 0) {
             linebuf_len = 0;
             index       = 1;
         }
@@ -69,12 +76,26 @@ bool AP_RangeFinder_uLanding::get_reading(uint16_t &reading_cm)
         if (index == 1) {
             linebuf[linebuf_len] = c;
             linebuf_len ++;
+
+#if ULANDING_VERSION == 1
+            if (linebuf_len == 6) {
+            // we have received six bytes data 
+            // checksum
+                //if (((linebuf[1] + linebuf[2] + linebuf[3] + linebuf[4]) & 0xFF) == linebuf[5]) {
+                    sum += linebuf[3]*256 + linebuf[2];
+                    count ++;
+                //}
+                index = 0;
+                linebuf_len = 0;
+            }
+#else
             if (linebuf_len == 3) {
                 index = 0;
                 sum += (linebuf[2]&0x7F) *128 + (linebuf[1]&0x7F);
                 linebuf_len = 0;
                 count ++;
             }
+#endif
         }
     }
 
@@ -82,7 +103,12 @@ bool AP_RangeFinder_uLanding::get_reading(uint16_t &reading_cm)
         return false;
     }
 
+#if ULANDING_VERSION == 1
+    reading_cm = sum / count;
+#else
     reading_cm = 2.5f * sum / count;
+#endif
+
     return true;
 }
 
